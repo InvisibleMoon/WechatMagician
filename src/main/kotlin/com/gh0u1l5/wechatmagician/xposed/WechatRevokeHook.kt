@@ -1,9 +1,22 @@
 package com.gh0u1l5.wechatmagician.xposed
 
+import android.app.Activity
+import android.app.Application
 import android.content.ContentValues
+import android.content.Context
+import android.content.Intent
 import android.content.res.XModuleResources
+import android.os.Bundle
+import android.os.Handler
+import android.preference.Preference
+import android.view.View
+import android.widget.BaseAdapter
+import android.widget.Button
+import android.widget.EditText
+import android.widget.GridView
 import com.gh0u1l5.wechatmagician.R
 import com.gh0u1l5.wechatmagician.util.MessageUtil
+import com.google.gson.Gson
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
@@ -22,6 +35,7 @@ class WechatRevokeHook(private val ver: WechatVersion, private val res: XModuleR
         try {
             hookDatabase(loader)
             hookRevoke(loader)
+            hookSns(loader)
         } catch(e: NoSuchMethodError) {
             when {
                 e.message!!.contains(ver.SQLiteDatabaseClass) -> {
@@ -171,5 +185,96 @@ class WechatRevokeHook(private val ver: WechatVersion, private val res: XModuleR
 //                XposedBridge.log("DB => executeSqlxecSQL p1 = $p1, p2 = ${MessageUtil.argsToString(p2)}")
 //            }
 //        })
+    }
+    
+    private fun hookSns(loader: ClassLoader?) {
+        XposedHelpers.findAndHookMethod(Application::class.java, "attach", Context::class.java, object : XC_MethodHook() {
+            @Throws(Throwable::class)
+            override fun afterHookedMethod(param: MethodHookParam) {
+
+                var snsMessageRecorder = mutableSetOf<String>()
+
+                var taskFlag = true
+                var currentSnsMemberIndex = 0
+
+                XposedHelpers.findAndHookMethod("com.tencent.mm.plugin.chatroom.ui.ChatroomInfoUI", loader, "onCreate", Bundle::class.java, object : XC_MethodHook() {
+                    @Throws(Throwable::class)
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val obj = param.thisObject
+                    }
+                })
+                XposedHelpers.findAndHookMethod("com.tencent.mm.plugin.chatroom.ui.SeeRoomMemberUI", loader, "onCreate", Bundle::class.java, object : XC_MethodHook() {
+                    @Throws(Throwable::class)
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val obj = param.thisObject
+                        val rootView = XposedHelpers.getObjectField(obj, "kAq") as GridView
+                        val adapter = XposedHelpers.getObjectField(obj, "kAx") as BaseAdapter
+
+                        Thread(Runnable() {
+                            while (true) {
+                                if (currentSnsMemberIndex >= adapter.count) {
+                                    //XposedBridge.log("DBG -> trigger exit case")
+                                    return@Runnable
+                                }
+                                else if (taskFlag) {
+                                    taskFlag = false
+                                    //XposedBridge.log("DBG -> current sns member index is ${currentSnsMemberIndex}")
+                                    rootView.post(Runnable {
+                                        rootView.performItemClick(adapter.getView(currentSnsMemberIndex, null, null),
+                                                currentSnsMemberIndex,
+                                                adapter.getItemId(currentSnsMemberIndex))
+                                        currentSnsMemberIndex += 1
+                                    })
+                                }
+                                else {
+                                    Thread.sleep(500)
+                                    //XposedBridge.log("DBG -> thread sleep")
+                                }
+                            }
+                        }).start()
+                    }
+                })
+                XposedHelpers.findAndHookMethod("com.tencent.mm.plugin.profile.ui.ContactInfoUI", loader, "onCreate", Bundle::class.java, object : XC_MethodHook() {
+                    @Throws(Throwable::class)
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val obj = param.thisObject
+                        val snsInstance = XposedHelpers.getObjectField(obj, "ooW")
+
+                        XposedHelpers.callMethod(snsInstance, "rp", "contact_info_sns")
+                        XposedHelpers.callMethod(obj, "finish")
+                    }
+                })
+                XposedHelpers.findAndHookMethod("com.tencent.mm.plugin.sns.ui.at", loader, "bho", object : XC_MethodHook() {
+                    @Throws(Throwable::class)
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val obj = param.thisObject
+                        val activity = XposedHelpers.getObjectField(obj, "gcv") as Activity
+                        val gson = Gson()
+
+                        val m1 = XposedHelpers.getObjectField(obj, "mRf") as ArrayList<Any>
+                        for (msg in m1) {
+                            val msgCont = XposedHelpers.getObjectField(msg, "qaV") as Map<String, Any>
+                            
+                            // content parser
+                            for (item in msgCont as Map<String, Any>) {
+                                if (!snsMessageRecorder.contains(item.key)) {
+                                    XposedBridge.log("SNS => ${gson.toJson(item.value).toString()}")
+                                    snsMessageRecorder.add(item.key)
+                                }
+                            }
+                        }
+                        if (!taskFlag) {
+                            activity.finish()
+                            taskFlag = true
+                        }
+                        //XposedBridge.log("DBG -> trigger callback")
+                    }
+                })
+            }
+        })
+    }
+    
+    private fun hookLog(loader: ClassLoader?) {
+        
     }
 }

@@ -4,15 +4,9 @@ import android.app.Activity
 import android.app.Application
 import android.content.ContentValues
 import android.content.Context
-import android.content.Intent
 import android.content.res.XModuleResources
 import android.os.Bundle
-import android.os.Handler
-import android.preference.Preference
-import android.view.View
 import android.widget.BaseAdapter
-import android.widget.Button
-import android.widget.EditText
 import android.widget.GridView
 import com.gh0u1l5.wechatmagician.R
 import com.gh0u1l5.wechatmagician.util.MessageUtil
@@ -194,13 +188,25 @@ class WechatRevokeHook(private val ver: WechatVersion, private val res: XModuleR
 
                 var snsMessageRecorder = mutableSetOf<String>()
 
-                var taskFlag = true
                 var currentSnsMemberIndex = 0
+                var currentFinishedSnsMemberIndex = 0
 
                 XposedHelpers.findAndHookMethod("com.tencent.mm.plugin.chatroom.ui.ChatroomInfoUI", loader, "onCreate", Bundle::class.java, object : XC_MethodHook() {
                     @Throws(Throwable::class)
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val obj = param.thisObject
+
+                        currentSnsMemberIndex = 0
+                        currentFinishedSnsMemberIndex = 0
+                    }
+                })
+                XposedHelpers.findAndHookMethod("com.tencent.mm.ui.base.preference.h", loader, "aX", String::class.java, Boolean::class.java, object : XC_MethodHook() {
+                    @Throws(Throwable::class)
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        val action = param.args[0] as String
+                        if (action.equals("see_room_member")) {
+                            param.args[1] = false
+                        }
                     }
                 })
                 XposedHelpers.findAndHookMethod("com.tencent.mm.plugin.chatroom.ui.SeeRoomMemberUI", loader, "onCreate", Bundle::class.java, object : XC_MethodHook() {
@@ -213,12 +219,9 @@ class WechatRevokeHook(private val ver: WechatVersion, private val res: XModuleR
                         Thread(Runnable() {
                             while (true) {
                                 if (currentSnsMemberIndex >= adapter.count) {
-                                    //XposedBridge.log("DBG -> trigger exit case")
                                     return@Runnable
                                 }
-                                else if (taskFlag) {
-                                    taskFlag = false
-                                    //XposedBridge.log("DBG -> current sns member index is ${currentSnsMemberIndex}")
+                                if (currentSnsMemberIndex <= currentFinishedSnsMemberIndex) {
                                     rootView.post(Runnable {
                                         rootView.performItemClick(adapter.getView(currentSnsMemberIndex, null, null),
                                                 currentSnsMemberIndex,
@@ -226,10 +229,7 @@ class WechatRevokeHook(private val ver: WechatVersion, private val res: XModuleR
                                         currentSnsMemberIndex += 1
                                     })
                                 }
-                                else {
-                                    Thread.sleep(500)
-                                    //XposedBridge.log("DBG -> thread sleep")
-                                }
+                                Thread.sleep(1000)
                             }
                         }).start()
                     }
@@ -263,11 +263,9 @@ class WechatRevokeHook(private val ver: WechatVersion, private val res: XModuleR
                                 }
                             }
                         }
-                        if (!taskFlag) {
-                            activity.finish()
-                            taskFlag = true
-                        }
-                        //XposedBridge.log("DBG -> trigger callback")
+                        //XposedBridge.log("DBG -> current sns member index is ${currentSnsMemberIndex}")
+                        activity.finish()
+                        currentFinishedSnsMemberIndex += 1
                     }
                 })
             }

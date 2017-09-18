@@ -11,10 +11,14 @@ import android.widget.GridView
 import com.gh0u1l5.wechatmagician.R
 import com.gh0u1l5.wechatmagician.util.MessageUtil
 import com.google.gson.Gson
+import com.google.gson.JsonIOException
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
+import java.io.FileWriter
 import java.lang.System.currentTimeMillis
+import java.text.SimpleDateFormat
+import java.util.*
 
 class WechatMessage(val msgId: Int, val type: Int, val talker: String, var content: String) {
     val time: Long = currentTimeMillis()
@@ -187,9 +191,8 @@ class WechatRevokeHook(private val ver: WechatVersion, private val res: XModuleR
             override fun afterHookedMethod(param: MethodHookParam) {
 
                 var snsMessageRecorder = mutableSetOf<String>()
-
                 var currentSnsMemberIndex = 0
-                var currentFinishedSnsMemberIndex = 0
+                var snsViewAutoFinish = false
 
                 XposedHelpers.findAndHookMethod("com.tencent.mm.plugin.chatroom.ui.ChatroomInfoUI", loader, "onCreate", Bundle::class.java, object : XC_MethodHook() {
                     @Throws(Throwable::class)
@@ -197,7 +200,7 @@ class WechatRevokeHook(private val ver: WechatVersion, private val res: XModuleR
                         val obj = param.thisObject
 
                         currentSnsMemberIndex = 0
-                        currentFinishedSnsMemberIndex = 0
+                        snsViewAutoFinish = false
                     }
                 })
                 XposedHelpers.findAndHookMethod("com.tencent.mm.ui.base.preference.h", loader, "aX", String::class.java, Boolean::class.java, object : XC_MethodHook() {
@@ -216,20 +219,21 @@ class WechatRevokeHook(private val ver: WechatVersion, private val res: XModuleR
                         val rootView = XposedHelpers.getObjectField(obj, "kAq") as GridView
                         val adapter = XposedHelpers.getObjectField(obj, "kAx") as BaseAdapter
 
+                        snsViewAutoFinish = true
+
                         Thread(Runnable() {
                             while (true) {
                                 if (currentSnsMemberIndex >= adapter.count) {
+                                    snsViewAutoFinish = false
                                     return@Runnable
                                 }
-                                if (currentSnsMemberIndex <= currentFinishedSnsMemberIndex) {
-                                    rootView.post(Runnable {
-                                        rootView.performItemClick(adapter.getView(currentSnsMemberIndex, null, null),
-                                                currentSnsMemberIndex,
-                                                adapter.getItemId(currentSnsMemberIndex))
-                                        currentSnsMemberIndex += 1
-                                    })
-                                }
-                                Thread.sleep(1000)
+                                rootView.post(Runnable {
+                                    rootView.performItemClick(adapter.getView(currentSnsMemberIndex, null, null),
+                                            currentSnsMemberIndex,
+                                            adapter.getItemId(currentSnsMemberIndex))
+                                    currentSnsMemberIndex += 1
+                                })
+                                Thread.sleep(4000)
                             }
                         }).start()
                     }
@@ -248,24 +252,38 @@ class WechatRevokeHook(private val ver: WechatVersion, private val res: XModuleR
                     @Throws(Throwable::class)
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val obj = param.thisObject
+                        val thisDay = SimpleDateFormat("yyyyMMdd").format(Date())
                         val activity = XposedHelpers.getObjectField(obj, "gcv") as Activity
+                        
                         val gson = Gson()
-
+                        val writer = FileWriter("/sdcard/wechatsns_${thisDay}.log", true)
                         val m1 = XposedHelpers.getObjectField(obj, "mRf") as ArrayList<Any>
-                        for (msg in m1) {
-                            val msgCont = XposedHelpers.getObjectField(msg, "qaV") as Map<String, Any>
-                            
-                            // content parser
-                            for (item in msgCont as Map<String, Any>) {
-                                if (!snsMessageRecorder.contains(item.key)) {
-                                    XposedBridge.log("SNS => ${gson.toJson(item.value).toString()}")
-                                    snsMessageRecorder.add(item.key)
+                        try {
+                            for (msg in m1) {
+                                val msgCont = XposedHelpers.getObjectField(msg, "qaV") as Map<String, Any>
+                                
+                                // content parser
+                                for (item in msgCont) {
+                                    if (!snsMessageRecorder.contains(item.key)) {
+                                        //XposedBridge.log("SNS => ${gson.toJson(item.value)}")
+                                        gson.toJson(item.value, writer)
+                                        writer.write("\r\n")
+                                        snsMessageRecorder.add(item.key)
+                                    }
                                 }
                             }
                         }
+                        catch (e: JsonIOException) {
+                            XposedBridge.log(e)
+                        }
+                        finally {
+                            writer.close()
+                        }
+
                         //XposedBridge.log("DBG -> current sns member index is ${currentSnsMemberIndex}")
-                        activity.finish()
-                        currentFinishedSnsMemberIndex += 1
+                        if (snsViewAutoFinish) {
+                            activity.finish()
+                        }
                     }
                 })
             }
